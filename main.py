@@ -219,10 +219,10 @@ def main_page():
                 
                 # File Uploader
                 with me.box(style=me.Style(width="100%")):
-                     me.text("Upload Document (PDF/DOCX)", style=me.Style(font_size=14, color="#475569", margin=me.Margin(bottom=8)))
+                     me.text("Upload Document (PDF/DOCX/EPUB)", style=me.Style(font_size=14, color="#475569", margin=me.Margin(bottom=8)))
                      me.uploader(
                         label="Choose File",
-                        accepted_file_types=["application/pdf", ".docx"],
+                        accepted_file_types=["application/pdf", ".docx", ".epub"],
                         on_upload=handle_upload,
                         type="flat",
                         style=me.Style(

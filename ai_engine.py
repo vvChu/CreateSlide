@@ -4,10 +4,13 @@ from google import genai
 from google.genai import types
 import docx
 import io
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import warnings
 
-# Define the schema explicitly for clarity, though Gemini's response_mime_type="application/json"
-# combined with system instructions is often enough. For stricter control, we could use
-# schema constraints, but prompt instructions are usually sufficient for this use case.
+# Suppress ebooklib warnings about future features if any
+warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
 
 SYSTEM_INSTRUCTION = """
 Bạn là chuyên gia thiết kế bài thuyết trình chuyên nghiệp. Nhiệm vụ của bạn là trích xuất nội dung từ tài liệu và tạo cấu trúc JSON cho bài thuyết trình.
@@ -36,6 +39,8 @@ JSON Schema bắt buộc:
 }
 """
 
+# ... (Previous code)
+
 def extract_text_from_docx(file_bytes: bytes) -> str:
     """Extracts text from a DOCX file bytes."""
     try:
@@ -47,23 +52,59 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     except Exception as e:
         raise ValueError(f"Lỗi khi đọc file DOCX: {str(e)}")
 
+def extract_text_from_epub(file_bytes: bytes) -> str:
+    """Extracts text from an EPUB file bytes."""
+    try:
+        # EbookLib requires a file path or a file-like object.
+        # However, epub.read_epub usually takes a path. 
+        # We save to a temp file or try to pass BytesIO if supported (often not fully).
+        # Workaround: Write bytes to a temporary file.
+        import tempfile
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+            
+        book = epub.read_epub(tmp_path)
+        full_text = []
+        
+        for item in book.get_items():
+            if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                # Use BS4 to strip HTML tags
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+                full_text.append(soup.get_text())
+                
+        # Clean up temp file
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
+            
+        return '\n'.join(full_text)
+
+    except Exception as e:
+        raise ValueError(f"Lỗi khi đọc file EPUB: {str(e)}")
+
 def analyze_document(file_bytes: bytes, mime_type: str, api_key: str = None, detail_level: str = "Tóm tắt", user_instructions: str = "") -> dict:
     """
     Sends document content to Gemini and returns parsed JSON.
     detail_level: "Tóm tắt" (Overview) or "Chi tiết" (Detailed)
     user_instructions: Optional specific requests from user behavior.
     """
+    # ... (Key check)
     # Use provided key or env var
     key = api_key or os.environ.get("GOOGLE_API_KEY")
     
     if not key:
         raise ValueError("Thiếu Google API Key. Vui lòng thiết lập biến môi trường hoặc nhập vào giao diện.")
 
-    # Import safe_print locally or at top (local is safer for circular imports if any, but top is cleaner)
+    # Import safe_print...
     from utils import safe_print
 
-    # Dynamic System Instruction based on Detail Level
+    # Dynamic System Instruction...
     base_instruction = SYSTEM_INSTRUCTION
+    
+    # ... (Logic for detail_level and user_instructions)
     
     # 1. Detail Level Logic
     if detail_level == "Chi tiết":
@@ -113,6 +154,13 @@ def analyze_document(file_bytes: bytes, mime_type: str, api_key: str = None, det
         elif mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             # Text extraction for DOCX
             text_content = extract_text_from_docx(file_bytes)
+            parts.append(types.Part.from_text(text=f"{prompt}\n\nNội dung tài liệu:\n{text_content}"))
+            
+        elif mime_type == "application/epub+zip":
+            # Text extraction for EPUB
+            safe_print("Processing EPUB file...")
+            text_content = extract_text_from_epub(file_bytes)
+            # Limit text length if too huge? Gemini 1.5/2.0 context is huge, so likely fine.
             parts.append(types.Part.from_text(text=f"{prompt}\n\nNội dung tài liệu:\n{text_content}"))
         
         else:
