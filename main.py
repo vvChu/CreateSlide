@@ -21,9 +21,19 @@ class State:
     uploaded_filename: str = ""
     user_topic: str = ""
     
+    # Template Data
+    template_file_bytes: bytes = b""
+    template_filename: str = ""
+    
     # Output Data
     pptx_filename: str = ""
     pptx_content_base64: str = ""
+    
+    # Detail Configuration
+    is_detailed: bool = False
+    
+    # Custom Instructions
+    user_instructions: str = ""
 
 def on_load(e: me.LoadEvent):
     me.set_theme_mode("system")
@@ -46,6 +56,25 @@ def handle_topic_input(e: me.InputEvent):
     state = me.state(State)
     state.user_topic = e.value
 
+def handle_template_upload(event: me.UploadEvent):
+    state = me.state(State)
+    file = event.file
+    
+    # Store template in state
+    state.template_file_bytes = file.read()
+    state.template_filename = file.name
+    
+    state.logs.append(f"Đã tải lên mẫu: {file.name}")
+
+def on_detail_change(e: me.CheckboxChangeEvent):
+    state = me.state(State)
+    state.is_detailed = e.checked
+
+def handle_user_instruction(e: me.InputEvent):
+    state = me.state(State)
+    state.user_instructions = e.value
+
+
 def generate_slides(e: me.ClickEvent):
     state = me.state(State)
     
@@ -55,6 +84,13 @@ def generate_slides(e: me.ClickEvent):
 
     state.processing_status = "analyzing"
     state.error_message = ""
+    
+    state.logs.append(f"Source Document: {state.uploaded_filename}")
+    if state.template_filename:
+        state.logs.append(f"Using Template: {state.template_filename}")
+        if state.template_filename == state.uploaded_filename:
+             state.logs.append("Warning: Source and Template are the same file!")
+
     state.logs.append("Đang phân tích tài liệu với Gemini...")
     yield # Yield to update UI
     
@@ -66,13 +102,24 @@ def generate_slides(e: me.ClickEvent):
         # For this step, I will assume analyze_document is as defined, 
         # potentially updating it to accept extra context would be a good refinement later.
         
-        slide_json = analyze_document(state.uploaded_file_bytes, state.uploaded_mime_type)
+        detail_mode = "Chi tiết" if state.is_detailed else "Tóm tắt"
+        state.logs.append(f"Chế độ phân tích: {detail_mode}")
+        
+        if state.user_instructions:
+            state.logs.append(f"Hướng dẫn người dùng: {state.user_instructions[:50]}...")
+
+        slide_json = analyze_document(
+            state.uploaded_file_bytes, 
+            state.uploaded_mime_type, 
+            detail_level=detail_mode,
+            user_instructions=state.user_instructions
+        )
         state.logs.append("Phân tích hoàn tất. Đang tạo cấu trúc slide...")
         state.processing_status = "generating"
         yield
         
         # 2. Generate PPTX
-        pptx_io = create_pptx(slide_json)
+        pptx_io = create_pptx(slide_json, template_pptx_bytes=state.template_file_bytes if state.template_file_bytes else None)
         pptx_bytes = pptx_io.read()
         
         # Prepare filename
@@ -90,10 +137,8 @@ def generate_slides(e: me.ClickEvent):
         state.error_message = str(ex)
         state.logs.append(f"Lỗi: {str(ex)}")
         # Safe print for Windows consoles
-        try:
-            print(f"Error: {str(ex)}")
-        except UnicodeEncodeError:
-            print(f"Error: {str(ex).encode('utf-8', errors='ignore')}")
+        from utils import safe_print
+        safe_print(f"Error: {str(ex)}")
         yield
 
 
@@ -190,10 +235,28 @@ def main_page():
                          me.icon("description", style=me.Style(color="#0284c7"))
                          me.text(state.uploaded_filename, style=me.Style(font_size=14, color="#0c4a6e"))
 
+                # Template Uploader (Optional)
+                with me.box(style=me.Style(width="100%")):
+                     me.text("Slide Template (Optional .pptx)", style=me.Style(font_size=14, color="#475569", margin=me.Margin(bottom=8)))
+                     me.uploader(
+                        label="Upload Template",
+                        accepted_file_types=[".pptx"],
+                        on_upload=handle_template_upload,
+                        type="stroked",
+                        style=me.Style(
+                            font_weight="500",
+                        )
+                    )
+                
+                if state.template_filename:
+                     with me.box(style=me.Style(background="#faf5ff", padding=me.Padding.all(12), border_radius=8, display="flex", align_items="center", gap=8)):
+                         me.icon("slideshow", style=me.Style(color="#9333ea"))
+                         me.text(state.template_filename, style=me.Style(font_size=14, color="#6b21a8"))
+
                 # Topic Input
                 with me.box(style=me.Style(width="100%")):
                     me.input(
-                        label="Chủ đề mong muốn (Optional)",
+                        label="Chủ đề mong muốn (Tùy chọn)",
                         on_blur=handle_topic_input,
                         style=me.Style(width="100%"),
                         value=state.user_topic
@@ -219,17 +282,43 @@ def main_page():
                                 key=topic,
                                 on_click=set_topic,
                                 type="stroked" if not is_selected else "flat",
-                                color="primary" if is_selected else "warn", # Use warn or accent to differentiate if primary is filled
+                                color="primary" if is_selected else "warn", 
                                 style=me.Style(
                                     font_size=12,
-                                    border_radius=20, # Pill shape
+                                    border_radius=20, 
                                     # Custom override for unselected state to look cleaner
                                     color="#2563eb" if is_selected else "#64748b",
                                     border=me.Border.all(me.BorderSide(width=1, color="#2563eb" if is_selected else "#cbd5e1")),
                                     background="#eff6ff" if is_selected else "#ffffff",
-                                    padding=me.Padding.symmetric(vertical=4, horizontal=12) # Compact pills
+                                    padding=me.Padding.symmetric(vertical=4, horizontal=12) 
                                 )
                             )
+
+                # Custom User Instructions
+                with me.box(style=me.Style(width="100%", margin=me.Margin(top=24))):
+                     me.textarea(
+                        label="Hướng dẫn đặc biệt cho AI (Tùy chọn)",
+                        placeholder="Ví dụ: Chỉ tập trung vào chương 2, giải thích kỹ thuật ngữ...",
+                        on_blur=handle_user_instruction,
+                        value=state.user_instructions,
+                        rows=3,
+                        style=me.Style(width="100%")
+                    )
+
+                # Detail Level Selection
+                with me.box(style=me.Style(width="100%", margin=me.Margin(top=24))):
+                    me.checkbox(
+                        label="Chế độ Chi tiết (Deep Dive)",
+                        checked=state.is_detailed,
+                        on_change=on_detail_change,
+                        style=me.Style(
+                             # margin=me.Margin(bottom=16)
+                        )
+                    )
+                    me.text(
+                        "Nếu chọn: Tạo nhiều slide hơn, nội dung sâu hơn. Mặc định: Tổng quan ngắn gọn.", 
+                        style=me.Style(font_size=12, color="#64748b", margin=me.Margin(top=4, left=32))
+                    )
 
                 # Generate Button
                 is_loading = state.processing_status in ["analyzing", "generating"]
@@ -243,7 +332,7 @@ def main_page():
                         width="100%", 
                         padding=me.Padding.symmetric(vertical=16),
                         font_size=16,
-                        margin=me.Margin(top="auto"), # Push to bottom
+                        margin=me.Margin(top=32), # Push to bottom
                     )
                 )
 
