@@ -14,6 +14,10 @@ import re
 # Suppress ebooklib warnings about future features if any
 warnings.filterwarnings("ignore", category=UserWarning, module='ebooklib')
 
+# Suppress BS4 XML/HTML warning for EPUBs
+from bs4 import XMLParsedAsHTMLWarning
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
 def robust_json_parse(text):
     """
     Parses JSON robustly, handling Markdown code blocks, single quotes (Python dicts),
@@ -164,12 +168,34 @@ def extract_text_from_epub(file_bytes: bytes) -> str:
             
         book = epub.read_epub(tmp_path)
         full_text = []
+
+        # Import safe_print locally since it's not at top level
+        from utils import safe_print
+        items = list(book.get_items())
+        safe_print(f"EPUB Loaded. Total items: {len(items)}")
         
-        for item in book.get_items():
-            if item.get_type() == ebooklib.ITEM_DOCUMENT:
+        for item in items:
+            # Check for document type OR generic HTML/XHTML content
+            # Some EPUBs mark chapters as ITEM_UNKNOWN or just don't set types correctly
+            is_doc = item.get_type() == ebooklib.ITEM_DOCUMENT
+            is_html = item.media_type and ('html' in item.media_type or 'xml' in item.media_type)
+            
+            if is_doc or is_html:
+                content = item.get_content()
+                if not content:
+                    continue
+                    
+                # safe_print(f"Processing item: {item.file_name} (Type: {item.get_type()})")
+                
                 # Use BS4 to strip HTML tags
-                soup = BeautifulSoup(item.get_content(), 'html.parser')
-                full_text.append(soup.get_text())
+                soup = BeautifulSoup(content, 'html.parser')
+                
+                # Use separator to prevent word mashing
+                text = soup.get_text(separator=' ', strip=True)
+                
+                # Only add meaningful chunks
+                if len(text) > 50:
+                    full_text.append(text)
                 
         # Clean up temp file
         try:
@@ -177,7 +203,9 @@ def extract_text_from_epub(file_bytes: bytes) -> str:
         except:
             pass
             
-        return '\n'.join(full_text)
+        result = '\n\n'.join(full_text)
+        safe_print(f"Extracted {len(result)} characters from EPUB.")
+        return result
 
     except Exception as e:
         raise ValueError(f"Lỗi khi đọc file EPUB: {str(e)}")

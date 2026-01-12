@@ -5,3 +5,5 @@ nuclear_success.txt
 .env
 venv/
 .gemini/
+
+.venv/

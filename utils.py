@@ -84,6 +84,9 @@ def suppress_console_output():
 
 def safe_print(text: str):
     """
-    Legacy helper. Does nothing.
+    Prints to stdout (which is redirected to app.log).
     """
-    pass
+    try:
+        print(text)
+    except:
+        pass
