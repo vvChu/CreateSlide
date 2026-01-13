@@ -38,6 +38,26 @@ def register_fonts():
             from reportlab.pdfbase import pdfmetrics
             if 'Arial' not in pdfmetrics.getRegisteredFontNames():
                 pdfmetrics.registerFont(TTFont('Arial', FONT_PATH))
+            
+            # Try to register Bold and Italic for Rich Text
+            arial_bold = "C:\\Windows\\Fonts\\arialbd.ttf"
+            arial_italic = "C:\\Windows\\Fonts\\ariali.ttf"
+            
+            if os.path.exists(arial_bold) and 'Arial-Bold' not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont('Arial-Bold', arial_bold))
+                
+            if os.path.exists(arial_italic) and 'Arial-Italic' not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont('Arial-Italic', arial_italic))
+                
+            # Register Family
+            pdfmetrics.registerFontFamily(
+                'Arial', 
+                normal='Arial', 
+                bold='Arial-Bold', 
+                italic='Arial-Italic', 
+                boldItalic='Arial-Bold' # Fallback for now
+            )
+            
             HAS_UNICODE_FONT = True
         except:
             pass
@@ -275,8 +295,9 @@ def save_summary_to_pdf(summary_data: dict, output_filename: str = "summary.pdf"
         title_style = ParagraphStyle(
             'CustomTitle', 
             parent=styles['Title'], 
-            fontName='Arial', 
+            fontName='Arial-Bold', 
             fontSize=26, 
+            leading=36,
             spaceAfter=12,
             alignment=TA_CENTER,
             textColor=colors.darkblue
