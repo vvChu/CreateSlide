@@ -1,92 +1,76 @@
 import os
 import sys
-
-class LogFileStream:
-    """
-    A stream that redirects output to a log file instead of the console.
-    This prevents Windows console crashes [Errno 22] while preserving logs.
-    """
-    def __init__(self, filename="app.log"):
-        self.filename = filename
-        # Ensure file exists and is empty/ready
-        with open(self.filename, "a", encoding="utf-8") as f:
-            pass
-            
-    def write(self, s):
-        try:
-            with open(self.filename, "a", encoding="utf-8") as f:
-                f.write(s)
-        except:
-            pass
-    
-    def flush(self):
-        try:
-            # File flush happens on close of block above, but we can be explicit if needed
-            pass
-        except:
-            pass
-    
-    def isatty(self):
-        return False
-        
-    def fileno(self):
-        # We can't easily give a real file descriptor for 'a' mode that stays open, 
-        # but returning a valid dummy or opening devnull is safer for libraries checking this.
-        try:
-            return os.open(self.filename, os.O_RDWR | os.O_APPEND)
-        except:
-            return -1
-        
-    @property
-    def encoding(self):
-        return 'utf-8'
-        
-    def __getattr__(self, _):
-        def dummy(*args, **kwargs):
-            return None
-        return dummy
+import logging
 
 def suppress_console_output():
     """
-    Redirects stdout/stderr to app.log via Python patching.
-    Explicitly deinits Colorama to prevent console crashes.
+    Redirects all output to app.log and disables console output to prevent
+    Windows [Errno 22] Invalid argument crashes.
     """
-    LOG_FILE = "app.log"
+    log_file = "app.log"
     
-    # 0. Attempt to neutralize Colorama if present
+    # 1. Setup Python Logging
+    # Clear any existing handlers
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers[:]:
+        root_logger.removeHandler(h)
+    
+    # Create File Handler
+    handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+    
+    # 2. Redirect sys.stdout and sys.stderr to the file completely
+    # We open the file in append mode and assign it to sys.stdout/stderr
+    # This gives a real file object with a real descriptor (usually)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    
+    # Keep a reference to the open file to prevent garbage collection
+    global _log_file_obj
+    _log_file_obj = open(log_file, 'a', encoding='utf-8', buffering=1)
+    
+    sys.stdout = _log_file_obj
+    sys.stderr = _log_file_obj
+
+    # 3. Aggressively Disable Colorama
+    # Colorama often wraps stdout/stderr. We need to prevent it or undo it.
     try:
         import colorama
         colorama.deinit()
-    except:
+        # Prevent re-init
+        colorama.init = lambda *args, **kwargs: None
+    except ImportError:
         pass
 
-    # 0.5. Neutralize CLICK (The source of banner crashes)
+    # 4. Patch Click (used by Flask/Mesop)
+    # Click attempts to access stream.encoding or isatty(). 
+    # Our real file object supports these naturally, so we might not need to patch dummy_echo
+    # UNLESS click writes directly to the old fd.
     try:
         import click
-        def dummy_echo(*args, **kwargs):
-            # Silently log to file if needed, or just ignore
-            try:
-                with open("app.log", "a", encoding="utf-8") as f:
-                    f.write(str(args) + "\n")
-            except:
-                pass
-        click.echo = dummy_echo
-        click.secho = dummy_echo
-    except:
+        # Force click to use our redirected stdout/stderr or just pass through
+        # By default click uses sys.stdout, so we should be good.
         pass
-
-    # 1. Python Level Silence -> Redirect to File
-    sys.stdout = LogFileStream(LOG_FILE)
-    sys.stderr = LogFileStream(LOG_FILE)
-
-    # Note: We removed os.dup2 to avoid "Closed file" errors with click/flask.
-    # By deiniting colorama, we hope to remove the main source of direct OS writes.
+    except ImportError:
+        pass
 
 def safe_print(text: str):
     """
-    Prints to stdout (which is redirected to app.log).
+    Safe print function that logs to the setup logger or file.
     """
     try:
-        print(text)
+        # Use the logger if configured
+        if logging.getLogger().handlers:
+            logging.info(text)
+        else:
+            # Fallback
+            print(text)
     except:
         pass
