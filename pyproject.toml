@@ -74,3 +74,23 @@ disallow_untyped_defs = false          # gradually adopt
 check_untyped_defs = true
 ignore_missing_imports = true          # third-party stubs not always available
 exclude = ["_legacy/", "tests/"]
+
+# ── Coverage ────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/ui/*",           # Mesop UI requires live server
+    "app/prompts/*",      # static prompt strings — nothing to test
+]
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "pass$",
+]
+# Fail CI if testable code drops below this threshold
+fail_under = 70

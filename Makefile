@@ -1,4 +1,4 @@
-.PHONY: help run test lint format typecheck clean docker-build docker-run install
+.PHONY: help run test test-cov test-integration lint format typecheck clean docker-build docker-run install
 
 PYTHON := .venv/bin/python
 MESOP  := .venv/bin/mesop
@@ -12,7 +12,8 @@ install: ## Install dependencies into .venv
 	python3 -m venv .venv
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r requirements.txt
-	$(PYTHON) -m pip install ruff mypy pytest pytest-asyncio
+	$(PYTHON) -m pip install ruff mypy pytest pytest-asyncio pytest-cov pre-commit
+	.venv/bin/pre-commit install
 	@echo "✅ Installed. Activate with: source .venv/bin/activate"
 
 run: ## Start the Mesop dev server
@@ -20,6 +21,9 @@ run: ## Start the Mesop dev server
 
 test: ## Run unit tests
 	$(PYTHON) -m pytest tests/ -v --tb=short
+
+test-cov: ## Run tests with coverage report
+	$(PYTHON) -m pytest tests/ --cov=app --cov-report=term-missing --cov-report=html -q
 
 test-integration: ## Run integration tests (requires live Ollama)
 	$(PYTHON) -m pytest tests/ -v --run-integration
