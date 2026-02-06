@@ -1,0 +1,22 @@
+# CreateSlide Docker Compose
+# Usage: docker compose up --build
+services:
+  app:
+    build: .
+    ports:
+      - "${SERVER_PORT:-32123}:32123"
+    env_file:
+      - .env
+    environment:
+      # Ollama on host machine — use host.docker.internal (Docker Desktop)
+      # or the LAN IP for Linux without Docker Desktop
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11444/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux support
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:32123')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -1,10 +1,38 @@
 __pycache__/
+*.pyc
+*.pyo
 *.log
 *.pptx
+*.pdf
 nuclear_success.txt
+cancel_signal.flag
+
+# Environment
 .env
 venv/
+.venv/
+
+# Legacy code (archived during v2.0 refactoring)
+_legacy/
+
+# AI/Tools
 .gemini/
 
-.venv/
-*.pdf
+# IDE/Editor
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python packaging
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/

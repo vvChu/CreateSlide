@@ -1,0 +1,76 @@
+[project]
+name = "createslide"
+version = "2.0.0"
+description = "AI-powered presentation & document summary generator"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+markers = [
+    "integration: requires live Ollama server (use --run-integration to run)",
+]
+
+# ── Ruff (linting + formatting) ─────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # bugbear
+    "A",     # builtins shadowing
+    "SIM",   # simplify
+    "TCH",   # type-checking imports
+    "RUF",   # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults (pydantic uses this)
+    "N802",   # function name should be lowercase (test methods OK)
+    "N803",   # argument name should be lowercase
+    "N806",   # variable in function should be lowercase
+    "SIM108", # use ternary operator (readability preference)
+    "TC001",  # move import into TYPE_CHECKING (adds complexity)
+    "TC003",  # move stdlib import into TYPE_CHECKING (adds complexity)
+    "RUF001", # ambiguous unicode chars (Vietnamese text)
+    "RUF002", # ambiguous unicode chars in docstrings
+    "RUF003", # ambiguous unicode chars in comments
+    "A001",   # variable shadowing builtin
+    "A002",   # argument shadowing builtin
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "B017", "SIM300", "RUF012"]  # broad exceptions + mutable attrs OK in tests
+"app/prompts/*" = ["E501", "W291", "W293"]  # prompts contain long strings + whitespace
+"app/ui/state.py" = ["RUF012"]         # mesop @stateclass doesn't support ClassVar
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ── Mypy (type checking) ────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false          # gradually adopt
+check_untyped_defs = true
+ignore_missing_imports = true          # third-party stubs not always available
+exclude = ["_legacy/", "tests/"]
