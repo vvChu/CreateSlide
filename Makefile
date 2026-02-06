@@ -1,4 +1,4 @@
-.PHONY: help run test test-cov test-integration lint format typecheck clean docker-build docker-run install
+.PHONY: help run test test-cov test-integration lint format typecheck clean docker-build docker-run install docs docs-serve
 
 PYTHON := .venv/bin/python
 MESOP  := .venv/bin/mesop
@@ -50,5 +50,11 @@ docker-run: ## Run in Docker (uses .env for config)
 	docker run --rm -p $(PORT):32123 --env-file .env \
 		--add-host=host.docker.internal:host-gateway \
 		createslide:latest
+
+docs: ## Build documentation site
+	$(PYTHON) -m mkdocs build --clean
+
+docs-serve: ## Serve docs locally (hot-reload)
+	$(PYTHON) -m mkdocs serve -a localhost:8000
 
 ci: lint test ## Run CI checks locally (lint + test)

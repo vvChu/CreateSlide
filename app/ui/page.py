@@ -1,12 +1,20 @@
 """Mesop page layout — the full ``main_page()`` UI component tree.
 
 Separated from handlers so that layout changes won't touch logic and vice-versa.
+
+v2.1 — UI polish:
+  • Anthropic / LiteLLM in provider dropdown
+  • Version badge in header
+  • Color-coded log entries
+  • Step indicators for multi-step flows
+  • Improved action buttons with icons
 """
 
 from __future__ import annotations
 
 import mesop as me
 
+from app import __version__
 from app.ui.handlers import (
     confirm_cancel,
     dismiss_cancel,
@@ -47,16 +55,29 @@ def main_page() -> None:
         # ── Header ──────────────────────────────────────────────────────
         with me.box(
             style=me.Style(
-                background="#ffffff",
-                padding=me.Padding.symmetric(vertical=20, horizontal=32),
-                border=me.Border(bottom=me.BorderSide(width=1, color="#e2e8f0")),
+                background="linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
+                padding=me.Padding.symmetric(vertical=16, horizontal=32),
+                border=me.Border(bottom=me.BorderSide(width=2, color="#e2e8f0")),
                 display="flex",
                 justify_content="space-between",
                 align_items="center",
             )
         ):
-            me.text("SlideGenius", style=me.Style(font_size=24, font_weight=700, color="#0f172a"))
-            me.text("AI Powered Presentation Generator", style=me.Style(color="#64748b", font_size=14))
+            with me.box(style=me.Style(display="flex", align_items="center", gap=12)):
+                me.icon("auto_awesome", style=me.Style(color="#2563eb", font_size=28))
+                me.text("SlideGenius", style=me.Style(font_size=24, font_weight=700, color="#0f172a"))
+                with me.box(
+                    style=me.Style(
+                        background="#dbeafe",
+                        padding=me.Padding.symmetric(vertical=2, horizontal=10),
+                        border_radius=12,
+                    )
+                ):
+                    me.text(f"v{__version__}", style=me.Style(font_size=11, color="#2563eb", font_weight=600))
+            me.text(
+                "AI-Powered Presentation & Document Intelligence",
+                style=me.Style(color="#64748b", font_size=13),
+            )
 
         # ── 2-Column layout ─────────────────────────────────────────────
         with me.box(
@@ -233,8 +254,10 @@ def _provider_config(state: State) -> None:
             label="Chọn AI Provider",
             options=[
                 me.SelectOption(label="Google Gemini (Mặc định)", value="gemini"),
-                me.SelectOption(label="OpenAI (GPT-4, GPT-4o, ...)", value="openai"),
+                me.SelectOption(label="OpenAI (GPT-4o, o4-mini, ...)", value="openai"),
+                me.SelectOption(label="Anthropic (Claude Sonnet/Haiku)", value="anthropic"),
                 me.SelectOption(label="Local LLM - Ollama (Miễn phí)", value="ollama"),
+                me.SelectOption(label="LiteLLM (100+ providers)", value="litellm"),
             ],
             value=state.ai_provider,
             on_selection_change=on_provider_change,
@@ -413,33 +436,63 @@ def _logs_area(state: State) -> None:
             border_radius=8,
             padding=me.Padding.all(16),
             overflow_y="auto",
-            font_family="monospace",
+            font_family="'JetBrains Mono', 'Fira Code', monospace",
         )
     ):
         if not state.logs:
             me.text("Waiting for input...", style=me.Style(color="#94a3b8", font_style="italic"))
         for log in state.logs:
-            me.text(f"> {log}", style=me.Style(color="#334155", font_size=13, margin=me.Margin(bottom=8)))
+            colour = _log_colour(log)
+            me.text(f"> {log}", style=me.Style(color=colour, font_size=12, margin=me.Margin(bottom=6)))
 
         _progress_indicator(state)
 
 
+def _log_colour(text: str) -> str:
+    """Return a colour based on log content for visual scanning."""
+    if "❌" in text or "Lỗi" in text or "ERROR" in text:
+        return "#dc2626"
+    if "⚠️" in text or "WARNING" in text:
+        return "#d97706"
+    if "✅" in text or "hoàn tất" in text.lower() or "completed" in text.lower():
+        return "#059669"
+    if "🟢" in text or "🔑" in text:
+        return "#2563eb"
+    if "🔄" in text:
+        return "#7c3aed"
+    if text.startswith("> Source:") or text.startswith("> Model"):
+        return "#6366f1"
+    return "#334155"
+
+
 def _progress_indicator(state: State) -> None:
     status_map = {
-        "analyzing": ("Reading & Analyzing...", "#2563eb"),
-        "generating": ("Designing Slides...", "#7c3aed"),
-        "analyzing_summary": ("Summarizing...", "#ea580c"),
-        "analyzing_review": ("Expert Reviewing (3 Steps)...", "#7c3aed"),
-        "generating_pdf": ("Creating PDF...", "#db2777"),
+        "analyzing": ("Reading & Analyzing Document...", "#2563eb", "auto_stories"),
+        "generating": ("Designing Slides...", "#7c3aed", "slideshow"),
+        "analyzing_summary": ("Summarizing Content...", "#ea580c", "summarize"),
+        "analyzing_review": ("Expert Review in Progress (3-Step Agent Pipeline)...", "#7c3aed", "psychology"),
+        "generating_pdf": ("Rendering PDF...", "#db2777", "picture_as_pdf"),
     }
     item = status_map.get(state.processing_status)
     if item:
-        label, colour = item
-        with me.box(style=me.Style(display="flex", align_items="center", gap=8, margin=me.Margin(top=16))):
+        label, colour, icon_name = item
+        with me.box(
+            style=me.Style(
+                display="flex",
+                align_items="center",
+                gap=12,
+                margin=me.Margin(top=16),
+                background="#f0f9ff",
+                padding=me.Padding.all(12),
+                border_radius=8,
+                border=me.Border.all(me.BorderSide(width=1, color="#bfdbfe")),
+            )
+        ):
             me.progress_spinner(diameter=20, stroke_width=2)
-            me.text(label, style=me.Style(color=colour, font_weight=500))
-        with me.box(style=me.Style(margin=me.Margin(left=16))):
-            me.button("Hủy lệnh", on_click=request_cancel, color="warn")
+            me.icon(icon_name, style=me.Style(color=colour, font_size=20))
+            me.text(label, style=me.Style(color=colour, font_weight=600, font_size=14))
+        with me.box(style=me.Style(margin=me.Margin(left=16, top=8))):
+            me.button("Hủy lệnh", on_click=request_cancel, color="warn", type="stroked")
 
 
 def _cancel_dialog() -> None:

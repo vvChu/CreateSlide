@@ -37,7 +37,7 @@ class TestRegistry:
 
     def test_get_provider_unknown_raises(self):
         with pytest.raises(ValueError, match="Unknown provider"):
-            get_provider("anthropic")
+            get_provider("nonexistent_provider")
 
     def test_get_provider_case_insensitive(self):
         provider = get_provider("OLLAMA", api_keys=["test-key"])

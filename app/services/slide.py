@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.core.json_parser import robust_json_parse
-from app.core.log import safe_print
+from app.core.log import safe_print, timed
 from app.prompts.slide import (
     DETAIL_MODE_INSTRUCTION,
     OVERVIEW_MODE_INSTRUCTION,
@@ -57,15 +57,16 @@ def analyze_document(
         base_url=keys[0] if provider == "ollama" and keys and keys[0].startswith("http") else None,
     )
 
-    generated_text, _used_model = llm.generate(
-        system=final_instruction,
-        prompt=full_prompt,
-        cancel_check=cancel_check,
-        response_format_json=True,
-        temperature=0.7,
-        file_bytes=file_bytes if provider == "gemini" else None,
-        mime_type=mime_type if provider == "gemini" else None,
-    )
+    with timed("analyze_document", provider=provider):
+        generated_text, _used_model = llm.generate(
+            system=final_instruction,
+            prompt=full_prompt,
+            cancel_check=cancel_check,
+            response_format_json=True,
+            temperature=0.7,
+            file_bytes=file_bytes if provider == "gemini" else None,
+            mime_type=mime_type if provider == "gemini" else None,
+        )
 
     if not generated_text:
         raise ValueError("AI không trả về nội dung.")

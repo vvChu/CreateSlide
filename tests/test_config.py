@@ -29,7 +29,7 @@ class TestAppConfig:
 
     def test_provider_validation_rejects_unknown(self):
         with pytest.raises(Exception):
-            AppConfig(default_provider="anthropic")
+            AppConfig(default_provider="nonexistent_provider")
 
     def test_provider_validation_normalises(self):
         cfg = AppConfig(default_provider="  OLLAMA  ")

@@ -36,6 +36,9 @@ class AppConfig(BaseSettings):
     # ── OpenAI ──────────────────────────────────────────────────────────
     openai_api_key: str = Field(default="", description="OpenAI API key")
 
+    # ── Anthropic Claude ────────────────────────────────────────────────
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
+
     # ── Ollama (local / DGX Spark) ──────────────────────────────────────
     ollama_base_url: str = Field(
         default="http://localhost:11444/v1",
@@ -72,7 +75,7 @@ class AppConfig(BaseSettings):
     @field_validator("default_provider")
     @classmethod
     def _validate_provider(cls, v: str) -> str:
-        allowed = {"auto", "gemini", "openai", "ollama"}
+        allowed = {"auto", "gemini", "openai", "ollama", "anthropic", "litellm"}
         v = v.strip().lower()
         if v not in allowed:
             raise ValueError(f"default_provider must be one of {allowed}, got '{v}'")
@@ -92,11 +95,13 @@ class AppConfig(BaseSettings):
         if self.default_provider != "auto":
             return self.default_provider
 
-        # Priority: Ollama (free, local) > Gemini > OpenAI
+        # Priority: Ollama (free, local) > Gemini > Anthropic > OpenAI
         if self.ollama_base_url:
             return "ollama"
         if self.google_api_key:
             return "gemini"
+        if self.anthropic_api_key:
+            return "anthropic"
         if self.openai_api_key:
             return "openai"
         return "ollama"  # ultimate fallback — user will see connection error

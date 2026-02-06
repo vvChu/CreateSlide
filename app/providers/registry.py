@@ -17,6 +17,21 @@ from app.providers.gemini import GeminiProvider
 from app.providers.ollama import OllamaProvider
 from app.providers.openai_provider import OpenAIProvider
 
+# Lazy imports for optional providers
+try:
+    from app.providers.anthropic_provider import AnthropicProvider
+
+    _HAS_ANTHROPIC = True
+except ImportError:
+    _HAS_ANTHROPIC = False
+
+try:
+    from app.providers.litellm_provider import LiteLLMProvider
+
+    _HAS_LITELLM = True
+except ImportError:
+    _HAS_LITELLM = False
+
 # ── Static registry ─────────────────────────────────────────────────────
 
 _PROVIDERS: dict[str, type[LLMProvider]] = {
@@ -24,6 +39,12 @@ _PROVIDERS: dict[str, type[LLMProvider]] = {
     "openai": OpenAIProvider,
     "ollama": OllamaProvider,
 }
+
+if _HAS_ANTHROPIC:
+    _PROVIDERS["anthropic"] = AnthropicProvider  # type: ignore[assignment]
+
+if _HAS_LITELLM:
+    _PROVIDERS["litellm"] = LiteLLMProvider  # type: ignore[assignment]
 
 
 def register_provider(name: str, cls: type[LLMProvider]) -> None:

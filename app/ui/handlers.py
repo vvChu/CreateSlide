@@ -1,13 +1,18 @@
 """Mesop event handlers — on_load, uploads, generation flows, cancel.
 
 All async generators that drive the progress UI live here.
+
+v2.1 — Async optimisations:
+  • Shared ``ThreadPoolExecutor`` (bounded, reused across requests)
+  • Per-request ``CancelToken`` (safe under concurrent users)
+  • ``run_in_executor`` helper for clean ``await`` syntax
+  • PDF/PPTX rendering offloaded to thread pool
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import concurrent.futures
 import contextlib
 import logging
 import os
@@ -17,7 +22,8 @@ import tempfile
 import mesop as me
 
 from app.config import settings
-from app.core.cancellation import check_cancel_signal, clear_cancel_signal, set_cancel_signal
+from app.core.cancellation import CancelToken, clear_cancel_signal, set_cancel_signal
+from app.core.executor import get_executor, run_in_executor
 from app.core.log import safe_print
 from app.providers.ollama import OllamaProvider
 from app.rendering.pdf import save_summary_to_pdf
@@ -142,11 +148,17 @@ def dismiss_cancel(e: me.ClickEvent) -> None:
     me.state(State).show_cancel_dialog = False
 
 
+# ── Active cancel token (per-request, set from generation flows) ──────────
+_active_token: CancelToken | None = None
+
+
 def confirm_cancel(e: me.ClickEvent) -> None:
     state = me.state(State)
     state.show_cancel_dialog = False
     state.cancel_requested = True
     set_cancel_signal()
+    if _active_token is not None:
+        _active_token.cancel()
     state.logs.append("⚠️ Đang yêu cầu hủy bỏ... Vui lòng đợi bước hiện tại hoàn tất.")
 
 
@@ -181,7 +193,10 @@ def _resolve_api_keys(state: State) -> tuple[list[str], str]:
 
 
 def _generate_pdf_and_store(state: State, data: dict, suffix: str) -> None:
-    """Render PDF, encode to base64, store on *state*."""
+    """Render PDF, encode to base64, store on *state*.
+
+    Called from within the thread pool, so all I/O is non-blocking to the UI.
+    """
     name_no_ext = state.uploaded_filename.rsplit(".", 1)[0]
     safe_name = re.sub(r"[^\w\s\-.]", "", name_no_ext)
     pdf_out_name = f"{safe_name}_{suffix}.pdf"
@@ -198,13 +213,33 @@ def _generate_pdf_and_store(state: State, data: dict, suffix: str) -> None:
     state.logs.append(f"Đã tạo xong file: {state.pdf_filename}")
 
 
+async def _poll_future(future, token: CancelToken, state: State):
+    """Poll a future with cancel checks, yielding for Mesop UI updates.
+
+    Returns the future result, or None if cancelled.
+    """
+    while not future.done():
+        if token.is_set() or me.state(State).cancel_requested:
+            state.processing_status = "idle"
+            state.logs.append("❌ Đã hủy bỏ lệnh.")
+            future.cancel()
+            yield None
+            return
+        yield  # let Mesop re-render
+        await asyncio.sleep(0.3)
+    yield future.result()
+
+
 # ── Async generation flows ──────────────────────────────────────────────
 
 
 async def generate_summary(e: me.ClickEvent):
+    global _active_token
     state = me.state(State)
     state.error_message = ""
     state.cancel_requested = False
+    token = CancelToken()
+    _active_token = token
     clear_cancel_signal()
     yield
 
@@ -220,51 +255,47 @@ async def generate_summary(e: me.ClickEvent):
     state.logs.append(f"Đang tóm tắt tài liệu với {label}...")
     yield
 
-    if state.cancel_requested:
+    if token.is_set():
         state.processing_status = "idle"
         state.logs.append("❌ Đã hủy bỏ lệnh.")
         yield
         return
 
     try:
-        executor = concurrent.futures.ThreadPoolExecutor()
-        try:
-            if state.is_detailed:
-                state.logs.append("Đang chạy chế độ Deep Dive...")
-                yield
-                future = executor.submit(
-                    summarize_book_deep_dive,
-                    state.uploaded_file_bytes,
-                    state.uploaded_mime_type,
-                    api_keys=api_keys_list,
-                    cancel_check=check_cancel_signal,
-                    provider=provider,
-                )
-            else:
-                future = executor.submit(
-                    summarize_document,
-                    state.uploaded_file_bytes,
-                    state.uploaded_mime_type,
-                    api_keys=api_keys_list,
-                    user_instructions=state.user_instructions,
-                    cancel_check=check_cancel_signal,
-                    provider=provider,
-                )
+        executor = get_executor()
+        if state.is_detailed:
+            state.logs.append("Đang chạy chế độ Deep Dive...")
+            yield
+            future = executor.submit(
+                summarize_book_deep_dive,
+                state.uploaded_file_bytes,
+                state.uploaded_mime_type,
+                api_keys=api_keys_list,
+                cancel_check=token.is_set,
+                provider=provider,
+            )
+        else:
+            future = executor.submit(
+                summarize_document,
+                state.uploaded_file_bytes,
+                state.uploaded_mime_type,
+                api_keys=api_keys_list,
+                user_instructions=state.user_instructions,
+                cancel_check=token.is_set,
+                provider=provider,
+            )
 
-            while not future.done():
-                if check_cancel_signal() or me.state(State).cancel_requested:
-                    state.processing_status = "idle"
-                    state.logs.append("❌ Đã hủy bỏ lệnh.")
-                    future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    yield
-                    return
+        while not future.done():
+            if token.is_set() or me.state(State).cancel_requested:
+                state.processing_status = "idle"
+                state.logs.append("❌ Đã hủy bỏ lệnh.")
+                future.cancel()
                 yield
-                await asyncio.sleep(0.5)
+                return
+            yield
+            await asyncio.sleep(0.3)
 
-            summary_data = future.result()
-        finally:
-            executor.shutdown(wait=False)
+        summary_data = future.result()
 
         if not summary_data:
             raise Exception("Empty result from executor")
@@ -276,13 +307,14 @@ async def generate_summary(e: me.ClickEvent):
         state.processing_status = "generating_pdf"
         yield
 
-        if me.state(State).cancel_requested:
+        if token.is_set():
             state.processing_status = "idle"
             state.logs.append("❌ Đã hủy bỏ lệnh.")
             yield
             return
 
-        _generate_pdf_and_store(state, summary_data, "summary")
+        # Offload PDF rendering to thread pool
+        await run_in_executor(_generate_pdf_and_store, state, summary_data, "summary")
         state.processing_status = "summary_done"
         yield
     except Exception as ex:
@@ -291,12 +323,17 @@ async def generate_summary(e: me.ClickEvent):
         state.error_message = str(ex)
         state.logs.append(f"Lỗi: {ex}")
         yield
+    finally:
+        _active_token = None
 
 
 async def generate_slides(e: me.ClickEvent):
+    global _active_token
     state = me.state(State)
     state.error_message = ""
     state.cancel_requested = False
+    token = CancelToken()
+    _active_token = token
     clear_cancel_signal()
     yield
 
@@ -315,40 +352,36 @@ async def generate_slides(e: me.ClickEvent):
     state.logs.append(f"Đang phân tích tài liệu ({detail_mode})...")
     yield
 
-    if state.cancel_requested:
+    if token.is_set():
         state.processing_status = "idle"
         state.logs.append("❌ Đã hủy bỏ lệnh.")
         yield
         return
 
     try:
-        executor = concurrent.futures.ThreadPoolExecutor()
-        try:
-            future = executor.submit(
-                analyze_document,
-                state.uploaded_file_bytes,
-                state.uploaded_mime_type,
-                api_keys=api_keys_list,
-                detail_level=detail_mode,
-                user_instructions=state.user_instructions,
-                cancel_check=check_cancel_signal,
-                provider=provider,
-            )
+        executor = get_executor()
+        future = executor.submit(
+            analyze_document,
+            state.uploaded_file_bytes,
+            state.uploaded_mime_type,
+            api_keys=api_keys_list,
+            detail_level=detail_mode,
+            user_instructions=state.user_instructions,
+            cancel_check=token.is_set,
+            provider=provider,
+        )
 
-            while not future.done():
-                if check_cancel_signal() or me.state(State).cancel_requested:
-                    state.processing_status = "idle"
-                    state.logs.append("❌ Đã hủy bỏ lệnh.")
-                    future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    yield
-                    return
+        while not future.done():
+            if token.is_set() or me.state(State).cancel_requested:
+                state.processing_status = "idle"
+                state.logs.append("❌ Đã hủy bỏ lệnh.")
+                future.cancel()
                 yield
-                await asyncio.sleep(0.5)
+                return
+            yield
+            await asyncio.sleep(0.3)
 
-            slide_json = future.result()
-        finally:
-            executor.shutdown(wait=False)
+        slide_json = future.result()
 
         if not slide_json:
             raise Exception("AI không trả về dữ liệu slide.")
@@ -357,13 +390,15 @@ async def generate_slides(e: me.ClickEvent):
         state.processing_status = "generating"
         yield
 
-        if me.state(State).cancel_requested:
+        if token.is_set():
             state.processing_status = "idle"
             state.logs.append("❌ Đã hủy bỏ lệnh.")
             yield
             return
 
-        pptx_io = create_pptx(
+        # Offload PPTX rendering to thread pool
+        pptx_io = await run_in_executor(
+            create_pptx,
             slide_json,
             template_pptx_bytes=state.template_file_bytes if state.template_file_bytes else None,
         )
@@ -381,13 +416,18 @@ async def generate_slides(e: me.ClickEvent):
         state.error_message = str(ex)
         state.logs.append(f"Lỗi: {ex}")
         yield
+    finally:
+        _active_token = None
 
 
 async def generate_review(e: me.ClickEvent):
+    global _active_token
     state = me.state(State)
     state.error_message = ""
     state.cancel_requested = False
     state.resume_data = {}
+    token = CancelToken()
+    _active_token = token
     clear_cancel_signal()
     yield
 
@@ -403,39 +443,35 @@ async def generate_review(e: me.ClickEvent):
     state.logs.append("Đang chạy Syntopic Book Review (3 Agents)...")
     yield
 
-    if state.cancel_requested:
+    if token.is_set():
         state.processing_status = "idle"
         state.logs.append("❌ Đã hủy bỏ lệnh.")
         yield
         return
 
     try:
-        executor = concurrent.futures.ThreadPoolExecutor()
-        try:
-            future = executor.submit(
-                review_book_syntopic,
-                state.uploaded_file_bytes,
-                state.uploaded_mime_type,
-                api_keys=api_keys_list,
-                language=state.review_language,
-                cancel_check=check_cancel_signal,
-                provider=provider,
-            )
+        executor = get_executor()
+        future = executor.submit(
+            review_book_syntopic,
+            state.uploaded_file_bytes,
+            state.uploaded_mime_type,
+            api_keys=api_keys_list,
+            language=state.review_language,
+            cancel_check=token.is_set,
+            provider=provider,
+        )
 
-            while not future.done():
-                if check_cancel_signal() or me.state(State).cancel_requested:
-                    state.processing_status = "idle"
-                    state.logs.append("❌ Đã hủy bỏ lệnh.")
-                    future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    yield
-                    return
+        while not future.done():
+            if token.is_set() or me.state(State).cancel_requested:
+                state.processing_status = "idle"
+                state.logs.append("❌ Đã hủy bỏ lệnh.")
+                future.cancel()
                 yield
-                await asyncio.sleep(0.5)
+                return
+            yield
+            await asyncio.sleep(0.3)
 
-            review_data = future.result()
-        finally:
-            executor.shutdown(wait=False)
+        review_data = future.result()
 
         if "used_model" in review_data:
             state.logs.append(f"Model used: {review_data['used_model']}")
@@ -444,12 +480,13 @@ async def generate_review(e: me.ClickEvent):
         state.processing_status = "generating_pdf"
         yield
 
-        if me.state(State).cancel_requested:
+        if token.is_set():
             state.processing_status = "idle"
             yield
             return
 
-        _generate_pdf_and_store(state, review_data, "expert_review")
+        # Offload PDF rendering to thread pool
+        await run_in_executor(_generate_pdf_and_store, state, review_data, "expert_review")
         state.processing_status = "review_done"
         yield
 
@@ -466,9 +503,12 @@ async def generate_review(e: me.ClickEvent):
         state.error_message = str(ex)
         state.logs.append(f"Lỗi Review: {ex}")
         yield
+    finally:
+        _active_token = None
 
 
 async def resume_review(e: me.ClickEvent):
+    global _active_token
     state = me.state(State)
     if not state.resume_data:
         state.error_message = "Không có dữ liệu để tiếp tục."
@@ -477,6 +517,8 @@ async def resume_review(e: me.ClickEvent):
 
     state.error_message = ""
     state.cancel_requested = False
+    token = CancelToken()
+    _active_token = token
     clear_cancel_signal()
     yield
 
@@ -484,7 +526,7 @@ async def resume_review(e: me.ClickEvent):
     state.logs.append("🔄 Đang tiếp tục xử lý (Resume)...")
     yield
 
-    if state.cancel_requested:
+    if token.is_set():
         state.processing_status = "idle"
         state.logs.append("❌ Đã hủy bỏ lệnh.")
         yield
@@ -492,33 +534,29 @@ async def resume_review(e: me.ClickEvent):
 
     try:
         api_keys_list, provider = _resolve_api_keys(state)
-        executor = concurrent.futures.ThreadPoolExecutor()
-        try:
-            future = executor.submit(
-                review_book_syntopic,
-                state.uploaded_file_bytes,
-                state.uploaded_mime_type,
-                api_keys=api_keys_list,
-                language=state.review_language,
-                cancel_check=check_cancel_signal,
-                resume_state=state.resume_data,
-                provider=provider,
-            )
+        executor = get_executor()
+        future = executor.submit(
+            review_book_syntopic,
+            state.uploaded_file_bytes,
+            state.uploaded_mime_type,
+            api_keys=api_keys_list,
+            language=state.review_language,
+            cancel_check=token.is_set,
+            resume_state=state.resume_data,
+            provider=provider,
+        )
 
-            while not future.done():
-                if check_cancel_signal() or me.state(State).cancel_requested:
-                    state.processing_status = "idle"
-                    state.logs.append("❌ Đã hủy bỏ lệnh.")
-                    future.cancel()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    yield
-                    return
+        while not future.done():
+            if token.is_set() or me.state(State).cancel_requested:
+                state.processing_status = "idle"
+                state.logs.append("❌ Đã hủy bỏ lệnh.")
+                future.cancel()
                 yield
-                await asyncio.sleep(0.5)
+                return
+            yield
+            await asyncio.sleep(0.3)
 
-            review_data = future.result()
-        finally:
-            executor.shutdown(wait=False)
+        review_data = future.result()
 
         if "used_model" in review_data:
             state.logs.append(f"Model used: {review_data['used_model']}")
@@ -528,12 +566,12 @@ async def resume_review(e: me.ClickEvent):
         state.resume_data = {}
         yield
 
-        if me.state(State).cancel_requested:
+        if token.is_set():
             state.processing_status = "idle"
             yield
             return
 
-        _generate_pdf_and_store(state, review_data, "expert_review")
+        await run_in_executor(_generate_pdf_and_store, state, review_data, "expert_review")
         state.processing_status = "review_done"
         yield
 
@@ -550,3 +588,5 @@ async def resume_review(e: me.ClickEvent):
         state.error_message = str(ex)
         state.logs.append(f"Lỗi Review: {ex}")
         yield
+    finally:
+        _active_token = None

@@ -1,4 +1,7 @@
-"""Thread-safe cancellation signalling via file + in-memory flag."""
+"""Thread-safe cancellation signalling via file + in-memory flag.
+
+Supports both the legacy global signal and per-request ``CancelToken`` objects.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,41 @@ import os
 import threading
 
 from app.config import settings
+
+# ── Per-request CancelToken ──────────────────────────────────────────────
+
+
+class CancelToken:
+    """Lightweight, per-request cancellation token (thread-safe).
+
+    Usage::
+
+        token = CancelToken()
+        future = executor.submit(service_fn, ..., cancel_check=token.is_set)
+        # later:
+        token.cancel()  # signal cancellation
+        token.is_set()  # check from worker thread
+    """
+
+    __slots__ = ("_event",)
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cancellation."""
+        self._event.set()
+
+    def is_set(self) -> bool:
+        """Return ``True`` if cancellation has been requested."""
+        return self._event.is_set()
+
+    def reset(self) -> None:
+        """Clear the cancellation flag for reuse."""
+        self._event.clear()
+
+
+# ── Legacy global signal (kept for backward-compat) ──────────────────────
 
 _lock = threading.Lock()
 _cancel_flag = False

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.core.json_parser import robust_json_parse
-from app.core.log import safe_print
+from app.core.log import request_context, safe_print, timed
 from app.prompts.summary import (
     PROMPT_DEEP_DIVE_FULL,
     PROMPT_SUMMARIZE_DOCUMENT,
@@ -32,6 +32,10 @@ def summarize_document(
     """Standard document summarisation → dict with mode='standard'."""
 
     keys = resolve_provider_keys(provider, api_key, api_keys)
+
+    with request_context() as rid:
+        safe_print(f"[{rid}] Starting standard summarisation (provider={provider})")
+
     full_prompt = f"{PROMPT_SUMMARIZE_DOCUMENT}\n{user_instructions}"
 
     # Pre-extract text for text-only providers
@@ -45,15 +49,16 @@ def summarize_document(
         base_url=keys[0] if provider == "ollama" and keys and keys[0].startswith("http") else None,
     )
 
-    response_text, model_name = llm.generate(
-        system=SUMMARIZER_SYSTEM_INSTRUCTION,
-        prompt=full_prompt,
-        cancel_check=cancel_check,
-        response_format_json=True,
-        temperature=0.4,
-        file_bytes=file_bytes if provider == "gemini" else None,
-        mime_type=mime_type if provider == "gemini" else None,
-    )
+    with timed("summarize_document", provider=provider):
+        response_text, model_name = llm.generate(
+            system=SUMMARIZER_SYSTEM_INSTRUCTION,
+            prompt=full_prompt,
+            cancel_check=cancel_check,
+            response_format_json=True,
+            temperature=0.4,
+            file_bytes=file_bytes if provider == "gemini" else None,
+            mime_type=mime_type if provider == "gemini" else None,
+        )
 
     data = robust_json_parse(response_text)
     if isinstance(data, list):
@@ -94,15 +99,16 @@ def summarize_book_deep_dive(
         base_url=keys[0] if provider == "ollama" and keys and keys[0].startswith("http") else None,
     )
 
-    response_text, model_name = llm.generate(
-        system="",
-        prompt=prompt,
-        cancel_check=cancel_check,
-        response_format_json=True,
-        temperature=0.4,
-        file_bytes=file_bytes if provider == "gemini" else None,
-        mime_type=mime_type if provider == "gemini" else None,
-    )
+    with timed("summarize_book_deep_dive", provider=provider):
+        response_text, model_name = llm.generate(
+            system="",
+            prompt=prompt,
+            cancel_check=cancel_check,
+            response_format_json=True,
+            temperature=0.4,
+            file_bytes=file_bytes if provider == "gemini" else None,
+            mime_type=mime_type if provider == "gemini" else None,
+        )
 
     data = robust_json_parse(response_text)
 
